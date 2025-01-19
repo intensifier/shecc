@@ -1,17 +1,29 @@
 CC ?= gcc
 CFLAGS := -O -g \
-	-ansi -pedantic \
-	-Wall -Wextra
+	-std=c99 -pedantic \
+	-Wall -Wextra \
+	-Wno-unused-but-set-variable \
+	-Wno-variadic-macros \
+	-Wno-uninitialized \
+	-Wno-strict-prototypes \
+	-Wno-declaration-after-statement \
+	-Wno-format \
+	-Wno-format-pedantic
+
+BUILD_SESSION := .session.mk
 
 include mk/common.mk
 include mk/arm.mk
 include mk/riscv.mk
+-include $(BUILD_SESSION)
 
 STAGE0 := shecc
 STAGE1 := shecc-stage1.elf
 STAGE2 := shecc-stage2.elf
 
 OUT ?= out
+ARCHS = arm riscv
+ARCH ?= $(firstword $(ARCHS))
 SRCDIR := $(shell find src -type d)
 LIBDIR := $(shell find lib -type d)
 
@@ -20,14 +32,12 @@ OBJS := $(SRCS:%.c=$(OUT)/%.o)
 deps := $(OBJS:%.o=%.o.d)
 TESTS := $(wildcard tests/*.c)
 TESTBINS := $(TESTS:%.c=$(OUT)/%.elf)
+SNAPSHOTS := $(foreach SNAPSHOT_ARCH,$(ARCHS), $(patsubst tests/%.c, tests/snapshots/%-$(SNAPSHOT_ARCH).json, $(TESTS)))
 
 all: config bootstrap
 
-# set ARM by default
-ifeq ($(strip $(ARCH)),riscv)
-ARCH = riscv
-else
-ARCH = arm
+ifeq (,$(filter $(ARCH),$(ARCHS)))
+$(error Support ARM and RISC-V only. Select the target with "ARCH=arm" or "ARCH=riscv")
 endif
 
 ifneq ("$(wildcard $(PWD)/config)","")
@@ -39,6 +49,7 @@ config:
 	$(Q)ln -s $(PWD)/$(SRCDIR)/$(ARCH)-codegen.c $(SRCDIR)/codegen.c
 	$(call $(ARCH)-specific-defs) > $@
 	$(VECHO) "Target machine code switch to %s\n" $(ARCH)
+	$(Q)$(MAKE) $(BUILD_SESSION) --silent
 
 $(OUT)/tests/%.elf: tests/%.c $(OUT)/$(STAGE0)
 	$(VECHO) "  SHECC\t$@\n"
@@ -46,8 +57,35 @@ $(OUT)/tests/%.elf: tests/%.c $(OUT)/$(STAGE0)
 	chmod +x $@ ; $(PRINTF) "Running $@ ...\n"
 	$(Q)$(TARGET_EXEC) $@ && $(call pass)
 
-check: $(TESTBINS) tests/driver.sh
-	tests/driver.sh
+check: check-stage0 check-stage2
+
+check-stage0: $(OUT)/$(STAGE0) $(TESTBINS) tests/driver.sh
+	$(VECHO) "  TEST STAGE 0\n"
+	tests/driver.sh 0
+
+check-stage2: $(OUT)/$(STAGE2) $(TESTBINS) tests/driver.sh
+	$(VECHO) "  TEST STAGE 2\n"
+	tests/driver.sh 2
+
+check-snapshots: $(OUT)/$(STAGE0) $(SNAPSHOTS) tests/check-snapshots.sh
+	$(Q)$(foreach SNAPSHOT_ARCH, $(ARCHS), $(MAKE) distclean config check-snapshot ARCH=$(SNAPSHOT_ARCH) --silent;)
+	$(VECHO) "Switching backend back to %s\n" $(ARCH)
+	$(Q)$(MAKE) distclean config ARCH=$(ARCH) --silent
+
+check-snapshot: $(OUT)/$(STAGE0) tests/check-snapshots.sh
+	$(VECHO) "Checking snapshot for %s\n" $(ARCH)
+	tests/check-snapshots.sh $(ARCH)
+	$(VECHO) "  OK\n"
+
+update-snapshots: tests/update-snapshots.sh
+	$(Q)$(foreach SNAPSHOT_ARCH, $(ARCHS), $(MAKE) distclean config update-snapshot ARCH=$(SNAPSHOT_ARCH) --silent;)
+	$(VECHO) "Switching backend back to %s\n" $(ARCH)
+	$(Q)$(MAKE) distclean config ARCH=$(ARCH) --silent
+
+update-snapshot: $(OUT)/$(STAGE0) tests/update-snapshots.sh
+	$(VECHO) "Updating snapshot for %s\n" $(ARCH)
+	tests/update-snapshots.sh $(ARCH)
+	$(VECHO) "  OK\n"
 
 $(OUT)/%.o: %.c
 	$(VECHO) "  CC\t$@\n"
@@ -81,12 +119,18 @@ bootstrap: $(OUT)/$(STAGE2)
 	echo "Unable to bootstrap. Aborting"; false; \
 	fi
 
+$(BUILD_SESSION):
+	$(PRINTF) "ARCH=$(ARCH)" > $@
+
 .PHONY: clean
 clean:
 	-$(RM) $(OUT)/$(STAGE0) $(OUT)/$(STAGE1) $(OUT)/$(STAGE2)
 	-$(RM) $(OBJS) $(deps)
 	-$(RM) $(TESTBINS) $(OUT)/tests/*.log $(OUT)/tests/*.lst
 	-$(RM) $(OUT)/shecc*.log
-	-$(RM) $(OUT)/inliner $(OUT)/libc.inc $(OUT)/target config $(SRCDIR)/codegen.c
+	-$(RM) $(OUT)/libc.inc
+
+distclean: clean
+	-$(RM) $(OUT)/inliner $(OUT)/target $(SRCDIR)/codegen.c config $(BUILD_SESSION)
 
 -include $(deps)

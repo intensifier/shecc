@@ -1,3 +1,10 @@
+/*
+ * shecc - Self-Hosting and Educational C Compiler.
+ *
+ * shecc is freely redistributable under the BSD 2 clause license. See the
+ * file "LICENSE" for information on usage and redistribution of this file.
+ */
+
 /* RISC-V instruction encoding */
 
 /* opcodes */
@@ -98,23 +105,19 @@ int rv_extract_bits(int imm, int i_start, int i_end, int d_start, int d_end)
         error("Invalid bit copy");
 
     v = imm >> i_start;
-    v = v & ((2 << (i_end - i_start)) - 1);
-    v = v << d_start;
+    v &= ((2 << (i_end - i_start)) - 1);
+    v <<= d_start;
     return v;
 }
 
 int rv_hi(int val)
 {
-    if ((val & (1 << 11)) != 0)
-        return val + 4096;
-    return val;
+    return val + ((val & (1 << 11)) << 1);
 }
 
 int rv_lo(int val)
 {
-    if ((val & (1 << 11)) != 0)
-        return (val & 0xFFF) - 4096;
-    return val & 0xFFF;
+    return (val & 0xFFF) - ((val & (1 << 11)) << 1);
 }
 
 int rv_encode_R(rv_op op, rv_reg rd, rv_reg rs1, rv_reg rs2)

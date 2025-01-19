@@ -5,6 +5,8 @@ else
     PRINTF = env printf
 endif
 
+HOST_ARCH = $(shell arch 2>/dev/null)
+
 # Control the build verbosity
 ifeq ("$(VERBOSE)","1")
     Q :=

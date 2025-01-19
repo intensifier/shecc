@@ -1,3 +1,10 @@
+/*
+ * shecc - Self-Hosting and Educational C Compiler.
+ *
+ * shecc is freely redistributable under the BSD 2 clause license. See the
+ * file "LICENSE" for information on usage and redistribution of this file.
+ */
+
 /* ARMv7-A instruction encoding */
 
 /* Identifier naming conventions
@@ -26,11 +33,13 @@ typedef enum {
     arm_sub = 2,
     arm_rsb = 3,
     arm_add = 4,
+    arm_ldm = 9,
     arm_teq = 9,
     arm_cmp = 10,
     arm_orr = 12,
     arm_mov = 13,
-    arm_mvn = 15
+    arm_mvn = 15,
+    arm_stmdb = 16
 } arm_op_t;
 
 /* Condition code
@@ -40,6 +49,9 @@ typedef enum {
 typedef enum {
     __EQ = 0,  /* Equal */
     __NE = 1,  /* Not equal */
+    __CS = 2,  /* Unsigned higher or same */
+    __CC = 3,  /* Unsigned lower */
+    __LS = 9,  /* Unsigned lower or same */
     __GE = 10, /* Signed greater than or equal */
     __LT = 11, /* Signed less than */
     __GT = 12, /* Signed greater than */
@@ -67,6 +79,13 @@ typedef enum {
     __pc = 15  /* program counter, r15 */
 } arm_reg;
 
+typedef enum {
+    logic_ls = 0, /* Logical left shift */
+    logic_rs = 1, /* Logical right shift */
+    arith_rs = 2, /* Arithmetic right shift */
+    rotat_rs = 3  /* Rotate right shift */
+} shift_type;
+
 arm_cond_t arm_get_cond(opcode_t op)
 {
     switch (op) {
@@ -90,15 +109,13 @@ arm_cond_t arm_get_cond(opcode_t op)
 
 int arm_extract_bits(int imm, int i_start, int i_end, int d_start, int d_end)
 {
-    int v;
-
     if (((d_end - d_start) != (i_end - i_start)) || (i_start > i_end) ||
         (d_start > d_end))
         error("Invalid bit copy");
 
-    v = imm >> i_start;
-    v = v & ((2 << (i_end - i_start)) - 1);
-    v = v << d_start;
+    int v = imm >> i_start;
+    v &= ((2 << (i_end - i_start)) - 1);
+    v <<= d_start;
     return v;
 }
 
@@ -119,7 +136,7 @@ int __mov(arm_cond_t cond, int io, int opcode, int s, int rn, int rd, int op2)
         shift = 16; /* full rotation */
         while ((op2 & 3) == 0) {
             /* we can shift by two bits */
-            op2 = op2 >> 2;
+            op2 >>= 2;
             shift -= 1;
         }
         if (op2 > 255)
@@ -159,7 +176,7 @@ int __movw(arm_cond_t cond, arm_reg rd, int imm)
 
 int __movt(arm_cond_t cond, arm_reg rd, int imm)
 {
-    imm = imm >> 16;
+    imm >>= 16;
     return arm_encode(cond, 52, 0, rd, 0) +
            arm_extract_bits(imm, 0, 11, 0, 11) +
            arm_extract_bits(imm, 12, 15, 16, 19);
@@ -181,10 +198,38 @@ int __srl(arm_cond_t cond, arm_reg rd, arm_reg rm, arm_reg rs)
                       rm + (1 << 4) + (1 << 5) + (rs << 8));
 }
 
+int __srl_amt(arm_cond_t cond,
+              int s,
+              shift_type shift,
+              arm_reg rd,
+              arm_reg rm,
+              int amt)
+{
+    return arm_encode(cond, s + (arm_mov << 1) + (0 << 5), 0, rd,
+                      rm + (0 << 4) + (shift << 5) + (amt << 7));
+}
+
 int __sll(arm_cond_t cond, arm_reg rd, arm_reg rm, arm_reg rs)
 {
     return arm_encode(cond, 0 + (arm_mov << 1) + (0 << 5), 0, rd,
                       rm + (1 << 4) + (0 << 5) + (rs << 8));
+}
+
+int __sll_amt(arm_cond_t cond,
+              int s,
+              shift_type shift,
+              arm_reg rd,
+              arm_reg rm,
+              int amt)
+{
+    return arm_encode(cond, s + (arm_mov << 1) + (0 << 5), 0, rd,
+                      rm + (0 << 4) + (shift << 5) + (amt << 7));
+}
+
+int __sra(arm_cond_t cond, arm_reg rd, arm_reg rm, arm_reg rs)
+{
+    return arm_encode(cond, 0 + (arm_mov << 1) + (0 << 5), 0, rd,
+                      rm + (5 << 4) + (rs << 8));
 }
 
 int __add_i(arm_cond_t cond, arm_reg rd, arm_reg rs, int imm)
@@ -246,6 +291,16 @@ int __sb(arm_cond_t cond, arm_reg rd, arm_reg rn, int ofs)
     return arm_transfer(cond, 0, 1, rn, rd, ofs);
 }
 
+int __stmdb(arm_cond_t cond, int w, arm_reg rn, int reg_list)
+{
+    return arm_encode(cond, arm_stmdb + (0x2 << 6) + (w << 1), rn, 0, reg_list);
+}
+
+int __ldm(arm_cond_t cond, int w, arm_reg rn, int reg_list)
+{
+    return arm_encode(cond, arm_ldm + (0x2 << 6) + (w << 1), rn, 0, reg_list);
+}
+
 int __b(arm_cond_t cond, int ofs)
 {
     int o = (ofs - 8) >> 2;
@@ -275,12 +330,17 @@ int __div(arm_cond_t cond, arm_reg rd, arm_reg r1, arm_reg r2)
 
 int __rsb_i(arm_cond_t cond, arm_reg rd, int imm, arm_reg rn)
 {
-    return __mov(cond, 1, arm_rsb, 0, rd, rn, imm);
+    return __mov(cond, 1, arm_rsb, 0, rn, rd, imm);
 }
 
 int __cmp_r(arm_cond_t cond, arm_reg r1, arm_reg r2)
 {
     return __mov(cond, 0, arm_cmp, 1, r1, 0, r2);
+}
+
+int __cmp_i(arm_cond_t cond, arm_reg rn, int imm)
+{
+    return __mov(cond, 1, arm_cmp, 1, rn, 0, imm);
 }
 
 int __teq(arm_reg rd)

@@ -4,5 +4,10 @@ a.out
 *.elf
 *.log
 *.lst
+*.dot
 config
 src/codegen.c
+.session.mk
+
+# vscode C/C++ plugin generated files
+.vscode
